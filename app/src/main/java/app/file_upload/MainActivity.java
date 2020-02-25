@@ -1,142 +1,216 @@
 package app.file_upload;
 
 import android.Manifest;
-import android.app.ProgressDialog;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.os.Build;
+import android.content.IntentFilter;
+import android.database.Cursor;
+import android.net.Uri;
 import android.os.Bundle;
-import android.support.annotation.NonNull;
-import android.support.v4.app.ActivityCompat;
+import android.os.Environment;
+import android.provider.MediaStore;
+import android.support.v4.content.FileProvider;
+import android.support.v4.content.LocalBroadcastManager;
+import android.support.v7.app.AlertDialog;
 import android.support.v7.app.AppCompatActivity;
 import android.view.View;
-import android.webkit.MimeTypeMap;
 import android.widget.Button;
-
-import com.nbsp.materialfilepicker.MaterialFilePicker;
-import com.nbsp.materialfilepicker.ui.FilePickerActivity;
-
+import android.widget.ImageView;
+import android.widget.TextView;
+import android.widget.Toast;
+import com.bumptech.glide.Glide;
+import com.bumptech.glide.request.RequestOptions;
+import com.karumi.dexter.Dexter;
+import com.karumi.dexter.MultiplePermissionsReport;
+import com.karumi.dexter.PermissionToken;
+import com.karumi.dexter.listener.PermissionRequest;
+import com.karumi.dexter.listener.multi.MultiplePermissionsListener;
 import java.io.File;
 import java.io.IOException;
-
-import okhttp3.MediaType;
-import okhttp3.MultipartBody;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.Response;
-
-public class MainActivity extends AppCompatActivity {
-
-    private Button button;
-
-
+import java.util.Calendar;
+import java.util.List;
+public class MainActivity extends AppCompatActivity implements View.OnClickListener {
+    static final int REQUEST_TAKE_PHOTO = 101;
+    static final int REQUEST_GALLERY_PHOTO = 102;
+    File mPhotoFile;
+    ImageView ivDisplayImage;
+    Button buttonUpload;
+    TextView tvSelectedFilePath;
+    ImageView ivSelectImage;
+    TextView txvResult;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
-        button = (Button) findViewById(R.id.button);
-
-
-        if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M){
-            if(ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED){
-                requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},100);
-                return;
-            }
-        }
-
-        enable_button();
+        ivDisplayImage = findViewById(R.id.ivDisplayImage);
+        buttonUpload = findViewById(R.id.buttonUpload);
+        tvSelectedFilePath = findViewById(R.id.tvSelectedFilePath);
+        ivSelectImage = findViewById(R.id.imageView2);
+        txvResult = findViewById(R.id.txvResult);
+        buttonUpload.setOnClickListener(this);
+        ivSelectImage.setOnClickListener(this);
     }
-
-    private void enable_button() {
-
-            button.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View view) {
-                    new MaterialFilePicker()
-                            .withActivity(MainActivity.this)
-                            .withRequestCode(10)
-                            .start();
-
+    @Override
+    public void onClick(View v) {
+        switch (v.getId()) {
+            case R.id.buttonUpload:
+                if (tvSelectedFilePath.getText().toString().isEmpty()) {
+                    Toast.makeText(this, "Select file first", Toast.LENGTH_LONG).show();
+                    return;
                 }
-            });
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        if(requestCode == 100 && (grantResults[0] == PackageManager.PERMISSION_GRANTED)){
-            enable_button();
-        }else {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},100);
-            }
+                Intent mIntent = new Intent(this, FileUploadService.class);
+                mIntent.putExtra("mFilePath", tvSelectedFilePath.getText().toString());
+                FileUploadService.enqueueWork(this, mIntent);
+                break;
+            case R.id.imageView2:
+                selectImage();
+                break;
         }
     }
-
-    ProgressDialog progress;
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, final Intent data) {
-        if(requestCode == 10 && resultCode == RESULT_OK){
-
-            progress = new ProgressDialog(MainActivity.this);
-            progress.setTitle("Uploading");
-            progress.setMessage("Please wait...");
-            progress.show();
-
-            Thread t = new Thread(new Runnable() {
-                @Override
-                public void run() {
-
-                    File f  = new File(data.getStringExtra(FilePickerActivity.RESULT_FILE_PATH));
-                    String content_type  = getMimeType(f.getPath());
-
-                    String file_path = f.getAbsolutePath();
-                    OkHttpClient client = new OkHttpClient();
-                    RequestBody file_body = RequestBody.create(MediaType.parse(content_type),f);
-
-                    RequestBody request_body = new MultipartBody.Builder()
-                            .setType(MultipartBody.FORM)
-                            .addFormDataPart("type",content_type)
-                            .addFormDataPart("uploaded_file",file_path.substring(file_path.lastIndexOf("/")+1), file_body)
-                            .build();
-
-                    Request request = new Request.Builder()
-                            .url("https://console.firebase.google.com/u/0/project/myapp-c20f6/storage/myapp-c20f6.appspot.com/files~2F223")
-                            .post(request_body)
-                            .build();
-
-                    try {
-                        Response response = client.newCall(request).execute();
-
-                        if(!response.isSuccessful()){
-                            throw new IOException("Error : "+response);
+    /**
+     * Alert dialog for capture or select from galley
+     */
+    private void selectImage() {
+        final CharSequence[] items = {
+                "Take Photo", "Choose from Library",
+                "Cancel"
+        };
+        AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+        builder.setItems(items, (dialog, item) -> {
+            if (items[item].equals("Take Photo")) {
+                requestStoragePermission(true);
+            } else if (items[item].equals("Choose from Library")) {
+                requestStoragePermission(false);
+            } else if (items[item].equals("Cancel")) {
+                dialog.dismiss();
+            }
+        });
+        builder.show();
+    }
+    /**
+     * Requesting multiple permissions (storage and camera) at once
+     * This uses multiple permission model from dexter
+     * On permanent denial opens settings dialog
+     */
+    private void requestStoragePermission(boolean isCamera) {
+        Dexter.withActivity(this)
+                .withPermissions(Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.CAMERA)
+                .withListener(new MultiplePermissionsListener() {
+                    @Override
+                    public void onPermissionsChecked(MultiplePermissionsReport report) {
+                        // check if all permissions are granted
+                        if (report.areAllPermissionsGranted()) {
+                            if (isCamera) {
+                                startCamera();
+                            } else {
+                                chooseGallery();
+                            }
                         }
-
-                        progress.dismiss();
-
-                    } catch (IOException e) {
-
-                        e.printStackTrace();
+                        // check for permanent denial of any permission
+                        if (report.isAnyPermissionPermanentlyDenied()) {
+                            // show alert dialog navigating to Settings
+                            chooseGallery();
+                        }
                     }
-
-
-                }
-            });
-
-            t.start();
-
-
-
-
+                    @Override
+                    public void onPermissionRationaleShouldBeShown(List<PermissionRequest> permissions,
+                                                                   PermissionToken token) {
+                        token.continuePermissionRequest();
+                    }
+                })
+                .withErrorListener(
+                        error -> Toast.makeText(getApplicationContext(), "Error occurred! ", Toast.LENGTH_SHORT)
+                                .show())
+                .onSameThread()
+                .check();
+    }
+    public void startCamera() {
+        mPhotoFile = newFile();
+        Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        if (takePictureIntent.resolveActivity(getPackageManager()) != null) {
+            if (mPhotoFile != null) {
+                Uri photoURI = FileProvider.getUriForFile(this,
+                        BuildConfig.APPLICATION_ID + ".provider", mPhotoFile);
+                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI);
+                startActivityForResult(takePictureIntent, REQUEST_TAKE_PHOTO);
+            }
         }
     }
-
-    private String getMimeType(String path) {
-
-        String extension = MimeTypeMap.getFileExtensionFromUrl(path);
-
-        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
+    public void chooseGallery() {
+        Intent pickPhoto = new Intent(Intent.ACTION_PICK,
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI);
+        pickPhoto.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivityForResult(pickPhoto, REQUEST_GALLERY_PHOTO);
+    }
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (resultCode == RESULT_OK) {
+            if (requestCode == REQUEST_TAKE_PHOTO) {
+                tvSelectedFilePath.setText(mPhotoFile.getAbsolutePath());
+                Glide.with(MainActivity.this)
+                        .load(mPhotoFile)
+                        .apply(new RequestOptions().centerCrop().circleCrop())
+                        .into(ivDisplayImage);
+            } else if (requestCode == REQUEST_GALLERY_PHOTO) {
+                Uri selectedImage = data.getData();
+                tvSelectedFilePath.setText(getRealPathFromUri(selectedImage));
+                Glide.with(MainActivity.this)
+                        .load(getRealPathFromUri(selectedImage))
+                        .apply(new RequestOptions().centerCrop().circleCrop())
+                        .into(ivDisplayImage);
+            }
+        }
+    }
+    public File newFile() {
+        Calendar cal = Calendar.getInstance();
+        long timeInMillis = cal.getTimeInMillis();
+        String mFileName = String.valueOf(timeInMillis) + ".jpeg";
+        File mFilePath = getFilePath();
+        try {
+            File newFile = new File(mFilePath.getAbsolutePath(), mFileName);
+            newFile.createNewFile();
+            return newFile;
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+    public File getFilePath() {
+        return getExternalFilesDir(Environment.DIRECTORY_MOVIES);
+    }
+    public String getRealPathFromUri(Uri contentUri) {
+        Cursor cursor = null;
+        try {
+            String[] proj = { MediaStore.Images.Media.DATA };
+            cursor = getContentResolver().query(contentUri, proj, null, null, null);
+            assert cursor != null;
+            int columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA);
+            cursor.moveToFirst();
+            return cursor.getString(columnIndex);
+        } finally {
+            if (cursor != null) {
+                cursor.close();
+            }
+        }
+    }
+    @Override
+    protected void onResume() {
+        super.onResume();
+        IntentFilter intentFilter = new IntentFilter("my.own.broadcast");
+        LocalBroadcastManager.getInstance(this)
+                .registerReceiver(myLocalBroadcastReceiver, intentFilter);
+    }
+    private BroadcastReceiver myLocalBroadcastReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String result = intent.getStringExtra("result");
+            txvResult.setText(result);
+        }
+    };
+    @Override
+    protected void onPause() {
+        super.onPause();
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(myLocalBroadcastReceiver);
     }
 }
