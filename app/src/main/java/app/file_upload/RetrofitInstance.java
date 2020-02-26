@@ -1,7 +1,9 @@
 package app.file_upload;
 
+import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
+import okhttp3.ConnectionSpec;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import retrofit2.Retrofit;
@@ -17,8 +19,10 @@ public class RetrofitInstance {
 
     public static RestApiService getApiService() {
         OkHttpClient client = new OkHttpClient.Builder()
+                .connectionSpecs(Arrays.asList(ConnectionSpec.MODERN_TLS, ConnectionSpec.CLEARTEXT))
                 .readTimeout(2, TimeUnit.MINUTES)
-                .writeTimeout(2, TimeUnit.MINUTES).addInterceptor(chain -> {
+                .writeTimeout(2, TimeUnit.MINUTES)
+                .addInterceptor(chain -> {
                     Request original = chain.request();
                     Request.Builder requestBuilder = original.newBuilder()
                             .method(original.method(), original.body());
@@ -28,7 +32,7 @@ public class RetrofitInstance {
         if (retrofit == null) {
             retrofit = new Retrofit
                     .Builder()
-                    .baseUrl("https://s3.amazonaws.com/cooltool.static/")
+                    .baseUrl("https://s3.amazonaws.com/")
                     .client(client)
                     .addConverterFactory(GsonConverterFactory.create())
                     .addCallAdapterFactory(RxJava2CallAdapterFactory.create())

@@ -6,22 +6,25 @@ package app.file_upload;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.AsyncTask;
 import android.support.annotation.NonNull;
 import android.support.v4.app.JobIntentService;
 import android.support.v4.content.LocalBroadcastManager;
 import android.util.Log;
 
 import java.io.File;
+import java.util.Arrays;
+import java.util.concurrent.TimeUnit;
 
-import io.reactivex.BackpressureStrategy;
-import io.reactivex.Flowable;
-import io.reactivex.FlowableEmitter;
-import io.reactivex.android.schedulers.AndroidSchedulers;
+import app.file_upload.task.AsyncTaskResult;
 import io.reactivex.disposables.Disposable;
-import io.reactivex.schedulers.Schedulers;
+import okhttp3.ConnectionSpec;
 import okhttp3.MediaType;
-import okhttp3.MultipartBody;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
 import okhttp3.RequestBody;
+import okhttp3.Response;
+
 public class FileUploadService extends JobIntentService {
     private static final String TAG = "FileUploadService";
     Disposable mDisposable;
@@ -48,15 +51,7 @@ public class FileUploadService extends JobIntentService {
             Log.e(TAG, "onHandleWork: Invalid file URI");
             return;
         }
-        RestApiService apiService = RetrofitInstance.getApiService();
-        Flowable<Double> fileObservable = Flowable.create(emitter -> {
-            apiService.onFileUpload(createMultipartBody(mFilePath, emitter)).blockingGet();
-            emitter.onComplete();
-        }, BackpressureStrategy.LATEST);
-        mDisposable = fileObservable.subscribeOn(Schedulers.computation())
-                .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(progress -> onProgress(progress), throwable -> onErrors(throwable),
-                        () -> onSuccess());
+        new UploadTask().execute(mFilePath);
     }
     private void onErrors(Throwable throwable) {
         sendBroadcastMeaasge("Error in file upload " + throwable.getMessage());
@@ -75,26 +70,48 @@ public class FileUploadService extends JobIntentService {
         localIntent.putExtra("result", message);
         LocalBroadcastManager.getInstance(this).sendBroadcast(localIntent);
     }
-    private RequestBody createRequestBodyFromFile(File file, String mimeType) {
-        return RequestBody.create(MediaType.parse(mimeType), file);
-    }
-    private RequestBody createRequestBodyFromText(String mText) {
-        return RequestBody.create(MediaType.parse("text/plain"), mText);
-    }
-    /**
-     * return multi part body in format of FlowableEmitter
-     */
-    private MultipartBody.Part createMultipartBody(String filePath, FlowableEmitter<Double> emitter) {
-        File file = new File(filePath);
-        return MultipartBody.Part.createFormData("file", file.getName(),
-                createCountingRequestBody(file, MIMEType.VIDEO.value, emitter));
-    }
-    private RequestBody createCountingRequestBody(File file, String mimeType,
-                                                  FlowableEmitter<Double> emitter) {
-        RequestBody requestBody = createRequestBodyFromFile(file, mimeType);
-        return new CountingRequestBody(requestBody, (bytesWritten, contentLength) -> {
-            double progress = (1.0 * bytesWritten) / contentLength;
-            emitter.onNext(progress);
-        });
+
+    private class UploadTask extends AsyncTask <String, Void, AsyncTaskResult <Void>> {
+        private static final int NETWORK_TIMEOUT_SEC = 60;
+        private static final String SERVER_URL = "https://s3.amazonaws.com/cooltool.static/ProjectContact/ProjectContact_238938902/WebEyeTracker/q_238938870/555225.mp4?AWSAccessKeyId=AKIAJK2OK5NFLD3C3BPQ&ContentType=video%2Fmp4&Expires=1582727253&Signature=OiUG1TEERlfQQSJlBABFrPpNuE4%3D";
+
+        @Override
+        protected AsyncTaskResult doInBackground(String... params) {
+            try {
+                // Get pre-signed Amazon url to upload file.
+                OkHttpClient client = new OkHttpClient.Builder()
+                        .connectionSpecs(Arrays.asList(ConnectionSpec.MODERN_TLS, ConnectionSpec.CLEARTEXT))
+                        .connectTimeout(NETWORK_TIMEOUT_SEC, TimeUnit.SECONDS)
+                        .readTimeout(NETWORK_TIMEOUT_SEC, TimeUnit.SECONDS)
+                        .writeTimeout(NETWORK_TIMEOUT_SEC, TimeUnit.SECONDS)
+                        .build();
+
+                // Upload file to Amazon.
+                String imagePath = params[0];
+                Request uploadFileRequest = new Request.Builder()
+                        .url(SERVER_URL)
+                        .put(RequestBody.create(MediaType.parse("video/mp4"), new File(imagePath))) // !read from uploaded file
+                        .build();
+                Response uploadResponse = client.newCall(uploadFileRequest).execute();
+                if (!uploadResponse.isSuccessful())
+                    return new AsyncTaskResult(new Exception("Upload file response code: " + uploadResponse.code()));
+
+                return new AsyncTaskResult(null);
+
+            } catch (Exception e) {
+                return new AsyncTaskResult(e);
+            }
+        }
+
+        @Override
+        protected void onPostExecute(AsyncTaskResult result) {
+            super.onPostExecute(result);
+            if (result.hasError()) {
+                Log.e(TAG, "UploadTask failed", result.getError());
+               // Toast.makeText(MainActivity.this, "UploadTask finished with error", Toast.LENGTH_LONG).show();
+            } else {
+                Log.d(TAG, "UploadTask finished successfullyd", result.getError());
+            }
+        }
     }
 }

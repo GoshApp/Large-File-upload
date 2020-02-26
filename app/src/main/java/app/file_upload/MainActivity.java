@@ -61,6 +61,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 }
                 Intent mIntent = new Intent(this, FileUploadService.class);
                 mIntent.putExtra("mFilePath", tvSelectedFilePath.getText().toString());
+
                 FileUploadService.enqueueWork(this, mIntent);
                 break;
             case R.id.imageView2:
